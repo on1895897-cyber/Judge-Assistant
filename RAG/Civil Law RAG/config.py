@@ -56,7 +56,7 @@ default_state_template = {
     "current_chapter": None,
     "current_article": None,
     "filter_type": "",
-    "k": 5,
+    "k": 8,
     "books_in_scope": [],
     "query_history": [],
     "retrieval_history": [],

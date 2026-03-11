@@ -17,6 +17,7 @@ Nodes included:
 """
 
 from typing import TypedDict, Optional, List
+import logging
 import re
 import json
 from langchain_core.documents import Document 
@@ -24,6 +25,9 @@ from langchain_community.vectorstores import Chroma
 from langchain_groq import ChatGroq
 from config import LLM_MODEL, EMBEDDING_MODEL, DB_DIR
 from langsmith import traceable
+
+logger = logging.getLogger("civil_law_rag")
+logger.setLevel(logging.DEBUG)
 from prompts import (
     PREPROCESSOR_PROMPT, 
     UNIFIED_REFINE_PROMPT,
@@ -120,9 +124,14 @@ def preprocessor_node(state: State) -> State:
     content = strip_code_fences(content)
     try:
         data = json.loads(content)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
         state["rewritten_question"] = query
         state["classification"] = "analytical"
+        logger.warning(
+            "[Layer 5 - Preprocessor] JSON parse failed: %s | raw=%s",
+            exc,
+            content[:300],
+        )
         return state
 
     # 4. Normalize labels
@@ -225,7 +234,7 @@ def textual_node(state: dict) -> dict:
 
 # Retriever Node
 @traceable(name="Retriever Node")
-def retrieve_node(state: dict, k: int = 5) -> dict:
+def retrieve_node(state: dict, k: int = 8) -> dict:
     """
     Retrieve relevant articles from the Egyptian Civil Law corpus
     based on the rewritten question. Stores results in state for grading.
@@ -253,7 +262,18 @@ def retrieve_node(state: dict, k: int = 5) -> dict:
     similarities = [score for _, score in results_with_scores]
     avg_confidence = sum(similarities) / len(similarities)
 
-    # 3. Update state
+    # 3. Structured logging for retrieval diagnostics
+    logger.info(
+        "[Layer 3 - Retrieval] query=%r | docs_returned=%d | avg_confidence=%.3f | "
+        "individual_scores=%s | top_article_indices=%s",
+        query,
+        len(last_results),
+        avg_confidence,
+        [round(s, 3) for s in similarities],
+        [d.metadata.get("index") for d in last_results],
+    )
+
+    # 4. Update state
     state["last_results"] = last_results
     state["retrieval_confidence"] = round(avg_confidence, 2)  # 0-1 scale
 
@@ -262,7 +282,7 @@ def retrieve_node(state: dict, k: int = 5) -> dict:
 
 # Rule Grader Node
 @traceable(name="Rule Grader Node")
-def rule_grader_node(state: dict, min_docs: int = 1, min_confidence: float = 0.4) -> dict:
+def rule_grader_node(state: dict, min_docs: int = 1, min_confidence: float = 0.5) -> dict:
     """
     Grades the quality of retrieved documents and decides
     whether refinement is needed.
@@ -297,6 +317,16 @@ def rule_grader_node(state: dict, min_docs: int = 1, min_confidence: float = 0.4
 
     # If everything looks good
     state["grade"] = "pass"
+
+    logger.info(
+        "[Layer 4 - Rule Grader] grade=%s | doc_count=%d | confidence=%.3f | "
+        "retry_count=%d | failure_reason=%s",
+        state["grade"],
+        len(docs),
+        confidence,
+        state.get("retry_count", 0),
+        state.get("failure_reason"),
+    )
     return state
 
 
@@ -320,8 +350,19 @@ def refine_node(state: dict) -> dict:
     try:
         data = json.loads(strip_code_fences(response.content))
         state["refined_query"] = data["refined_query"]
-    except Exception:
+        logger.info(
+            "[Layer 4 - Refine] retry_count=%d | original_query=%r | refined_query=%r",
+            state["retry_count"],
+            query,
+            state["refined_query"],
+        )
+    except Exception as exc:
         state["refined_query"] = query
+        logger.warning(
+            "[Layer 4 - Refine] JSON parse failed: %s | raw_response=%s",
+            exc,
+            response.content[:300],
+        )
 
     return state
 
@@ -337,7 +378,7 @@ def llm_grader_node(state: dict) -> dict:
     docs = state.get("last_results", [])
 
     docs_text = "\n\n".join(
-        f"المادة {d.metadata.get('article_number')}:\n{d.page_content}"
+        f"المادة {d.metadata.get('index', d.metadata.get('article_number'))}:\n{d.page_content}"
         for d in docs
     )
 
@@ -352,9 +393,19 @@ def llm_grader_node(state: dict) -> dict:
         result = json.loads(strip_code_fences(response.content))
         state["llm_pass"] = result["pass"]
         state["failure_reason"] = result.get("reason", "")
-    except Exception:
+        logger.info(
+            "[Layer 4 - LLM Grader] llm_pass=%s | reason=%s",
+            state["llm_pass"],
+            state["failure_reason"],
+        )
+    except Exception as exc:
         state["llm_pass"] = False
         state["failure_reason"] = "فشل تحليل المستندات بسبب خطأ في تنسيق الرد."
+        logger.warning(
+            "[Layer 4 - LLM Grader] JSON parse failed: %s | raw_response=%s",
+            exc,
+            response.content[:300],
+        )
 
     return state
 
@@ -370,7 +421,7 @@ def generate_answer_node(state: dict) -> dict:
         return state
 
     context_text = "\n\n".join(
-        f"(المادة {d.metadata.get('article_number', 'غير معروفة')})\n{d.page_content}"
+        f"(المادة {d.metadata.get('index', d.metadata.get('article_number', 'غير معروفة'))})\n{d.page_content}"
         for d in docs
     )
 

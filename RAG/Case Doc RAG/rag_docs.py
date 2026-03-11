@@ -1,6 +1,10 @@
+import logging
 import os
 
 from langchain_huggingface import HuggingFaceEmbeddings
+
+logger = logging.getLogger("case_doc_rag")
+logger.setLevel(logging.DEBUG)
 from langchain_community.vectorstores import Chroma
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage
@@ -23,7 +27,7 @@ load_dotenv()
 _MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 _MONGO_DB = os.getenv("MONGO_DB", "Rag")
 _MONGO_COLLECTION = os.getenv("MONGO_COLLECTION", "Document Storage")
-_EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5")
+_EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
 _CHROMA_COLLECTION = os.getenv("CHROMA_COLLECTION", "judicial_docs")
 _CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./chroma_data")
 
@@ -40,7 +44,7 @@ if _CHROMA_PERSIST_DIR:
     _chroma_kwargs["persist_directory"] = _CHROMA_PERSIST_DIR
 
 db = Chroma(**_chroma_kwargs)
-retriever = db.as_retriever(search_type="mmr", search_kwargs={"k": 5})
+retriever = db.as_retriever(search_type="mmr", search_kwargs={"k": 8})
 
 
 def set_vectorstore(vectorstore):
@@ -50,7 +54,7 @@ def set_vectorstore(vectorstore):
     so documents indexed at ingest time are visible during retrieval."""
     global db, retriever
     db = vectorstore
-    retriever = db.as_retriever(search_type="mmr", search_kwargs={"k": 5})
+    retriever = db.as_retriever(search_type="mmr", search_kwargs={"k": 8})
 
 
 client = MongoClient(_MONGO_URI)
@@ -440,7 +444,7 @@ def retrieve(state: AgentState):
         filtered_retriever = db.as_retriever(
             search_type="mmr",
             search_kwargs={
-                "k": 5,
+                "k": 8,
                 "filter": meta_filter,
             },
         )
@@ -453,7 +457,7 @@ def retrieve(state: AgentState):
             fallback_retriever = db.as_retriever(
                 search_type="mmr",
                 search_kwargs={
-                    "k": 5,
+                    "k": 8,
                     "filter": {"type": doc_target},
                 },
             )
@@ -466,7 +470,7 @@ def retrieve(state: AgentState):
             title_retriever = db.as_retriever(
                 search_type="mmr",
                 search_kwargs={
-                    "k": 5,
+                    "k": 8,
                     "filter": {"title": doc_target},
                 },
             )
@@ -488,7 +492,7 @@ def retrieve(state: AgentState):
         case_retriever = db.as_retriever(
             search_type="mmr",
             search_kwargs={
-                "k": 5,
+                "k": 8,
                 "filter": {"case_id": case_id},
             },
         )
@@ -504,6 +508,14 @@ def retrieve(state: AgentState):
         print(f"retrieve: unfiltered retrieval returned {len(docs)} doc(s)")
 
     state["retrieved_docs"] = docs
+    logger.info(
+        "[Layer 3 - Retrieve] docs_returned=%d | doc_target=%s | "
+        "query=%r | case_id=%s",
+        len(docs),
+        doc_target,
+        query[:100] if query else "",
+        case_id,
+    )
 
     return state
 
@@ -522,16 +534,16 @@ def retriveGrader(state: AgentState):
         print(f"retrieval_grader: proccedToGenerate = {state['proceedToGenerate']}")
         return state
 
-    system = """You are a grader assessing the relevance of a retrieved legal document to a judge's question.
-    
-    The documents are from Egyptian Civil Law cases (Statement of Claims, Expert Reports, Court Rulings).
-    The documents are written in Arabic. The judge's question is also in Arabic.
-    
-    If the document contains keywords, facts, names, dates, or legal references 
-    that could help answer the judge's question, grade it as 'Yes'.
-    Only grade 'No' if the document is completely unrelated to the question.
-    
-    Give a binary score 'Yes' or 'No'."""  
+    system = """أنت مقيّم لمدى صلة المستندات القانونية المسترجعة بسؤال القاضي.
+
+    المستندات مستخرجة من ملفات قضايا مدنية مصرية (صحف دعاوى، تقارير خبراء، أحكام محاكم).
+    المستندات مكتوبة بالعربية، وسؤال القاضي أيضاً بالعربية.
+
+    إذا احتوى المستند على كلمات مفتاحية أو وقائع أو أسماء أو تواريخ أو مراجع قانونية
+    يمكن أن تساعد في الإجابة على سؤال القاضي، قيّمه بـ 'Yes'.
+    قيّم بـ 'No' فقط إذا كان المستند غير مرتبط تماماً بالسؤال.
+
+    أعط تقييماً ثنائياً 'Yes' أو 'No'."""
 
     structuredLLM = llm.with_structured_output(GradeDocument)
     
@@ -553,6 +565,14 @@ def retriveGrader(state: AgentState):
         state["proceedToGenerate"] = True
     else:
         state["proceedToGenerate"] = False
+    logger.info(
+        "[Layer 4 - Retrieval Grader] relevant=%d/%d | proceedToGenerate=%s | "
+        "query=%r",
+        len(relevant_docs),
+        len(docs),
+        state["proceedToGenerate"],
+        state.get("refined_query", "")[:100],
+    )
     print(f"retrieval_grader: proccedToGenerate = {state['proceedToGenerate']} ({len(relevant_docs)}/{len(docs)} relevant)")
     return state
 

@@ -162,7 +162,7 @@ class FileIngestor:
         mongo_uri: Optional[str] = None,
         mongo_db: str = "Rag",
         mongo_collection: str = "Document Storage",
-        embedding_model: str = "BAAI/bge-large-en-v1.5",
+        embedding_model: str = "BAAI/bge-m3",
         chroma_collection: str = "judicial_docs",
         chroma_persist_dir: Optional[str] = None,
     ):
