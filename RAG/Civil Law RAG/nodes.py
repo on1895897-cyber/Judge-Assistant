@@ -135,7 +135,7 @@ def preprocessor_node(state: State) -> State:
     state["rewritten_question"] = data.get("rewritten_question", query)
     state["classification"] = classification_map.get(
         data.get("classification"),
-        "off_topic"
+        "analytical"
     )
 
     # 5. Update history
