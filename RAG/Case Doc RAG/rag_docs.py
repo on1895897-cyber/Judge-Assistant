@@ -43,6 +43,16 @@ db = Chroma(**_chroma_kwargs)
 retriever = db.as_retriever(search_type="mmr", search_kwargs={"k": 5})
 
 
+def set_vectorstore(vectorstore):
+    """Replace the module-level Chroma ``db`` and ``retriever`` with an
+    externally-provided vector store.  This allows the Supervisor adapter
+    to inject the *same* Chroma instance that the FileIngestor writes to,
+    so documents indexed at ingest time are visible during retrieval."""
+    global db, retriever
+    db = vectorstore
+    retriever = db.as_retriever(search_type="mmr", search_kwargs={"k": 5})
+
+
 client = MongoClient(_MONGO_URI)
 dbMongo = client[_MONGO_DB]
 collection = dbMongo[_MONGO_COLLECTION]

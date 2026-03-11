@@ -19,6 +19,19 @@ from Supervisor.agents.base import AgentAdapter, AgentResult
 logger = logging.getLogger(__name__)
 
 
+def _get_shared_vectorstore():
+    """Return the shared Chroma vector store used by the FileIngestor.
+
+    This ensures the Case Doc RAG reads from the *same* store that
+    documents were indexed into, avoiding the empty-store problem that
+    occurs when ``rag_docs.py`` creates its own in-memory Chroma
+    instance at import time.
+    """
+    from Supervisor.nodes.classify_and_store_document import _get_ingestor
+    ingestor = _get_ingestor()
+    return ingestor.vectorstore
+
+
 class CaseDocRAGAdapter(AgentAdapter):
     """Thin wrapper around the Case Doc RAG LangGraph workflow."""
 
@@ -46,7 +59,21 @@ class CaseDocRAGAdapter(AgentAdapter):
             from dotenv import load_dotenv
             load_dotenv()
 
+            import rag_docs
             from rag_docs import app
+
+            # Inject the shared vector store so rag_docs queries the
+            # same Chroma instance that documents were indexed into.
+            try:
+                shared_vs = _get_shared_vectorstore()
+                rag_docs.set_vectorstore(shared_vs)
+                logger.info("Injected shared vectorstore into rag_docs")
+            except Exception as exc:
+                logger.warning(
+                    "Could not inject shared vectorstore: %s. "
+                    "rag_docs will use its own Chroma instance.",
+                    exc,
+                )
 
             case_id = context.get("case_id", "")
 
