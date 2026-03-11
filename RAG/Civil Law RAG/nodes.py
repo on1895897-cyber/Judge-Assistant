@@ -79,6 +79,11 @@ class State(TypedDict):
 # Node implementations
 # ------------------------
 
+def strip_code_fences(text: str) -> str:
+    """Remove leading/trailing markdown code fences that LLMs sometimes wrap around JSON."""
+    return re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
+
+
 def fast_filters(query: str) -> str | None:
     """Fast rule-based filtering for off-topic queries."""
     query = query.strip()
@@ -111,12 +116,13 @@ def preprocessor_node(state: State) -> State:
     response = llm.invoke(prompt)
     content = response.content.strip()
 
-    # 3. Parse JSON
+    # 3. Parse JSON (strip markdown code fences that LLMs may add)
+    content = strip_code_fences(content)
     try:
         data = json.loads(content)
     except json.JSONDecodeError:
         state["rewritten_question"] = query
-        state["classification"] = "off_topic"
+        state["classification"] = "analytical"
         return state
 
     # 4. Normalize labels
@@ -129,7 +135,7 @@ def preprocessor_node(state: State) -> State:
     state["rewritten_question"] = data.get("rewritten_question", query)
     state["classification"] = classification_map.get(
         data.get("classification"),
-        "off_topic"
+        "analytical"
     )
 
     # 5. Update history
@@ -229,27 +235,27 @@ def retrieve_node(state: dict, k: int = 5) -> dict:
         - db: Chroma vector store
         - k: number of articles to retrieve
     """
-    db = state["db"]
+    db = database  # use the module-level Chroma instance (Bug 2 fix)
     query = state.get("rewritten_question") or state.get("last_query")
 
-    # 1️⃣ Retrieve top-k relevant articles
-    last_results = db.similarity_search(query, k=k, filter={"type": "article"})
+    # 1. Retrieve top-k relevant articles with relevance scores (Bug 3 fix)
+    results_with_scores = db.similarity_search_with_relevance_scores(
+        query, k=k, filter={"type": "article"}
+    )
 
-    if not last_results:
+    if not results_with_scores:
         state["last_results"] = []
         state["retrieval_confidence"] = 0.0
         return state
 
-    # 2️⃣ Optional: compute a retrieval confidence based on similarity scores
-    # Note: Chroma may not return scores by default; this depends on your library
-    similarities = [
-        getattr(doc, "score", 1.0) for doc in last_results  # fallback to 1.0 if no score
-    ]
+    # 2. Unpack documents and actual similarity scores
+    last_results = [doc for doc, _ in results_with_scores]
+    similarities = [score for _, score in results_with_scores]
     avg_confidence = sum(similarities) / len(similarities)
 
-    # 3️⃣ Update state
+    # 3. Update state
     state["last_results"] = last_results
-    state["retrieval_confidence"] = round(avg_confidence, 2)  # 0–1 scale
+    state["retrieval_confidence"] = round(avg_confidence, 2)  # 0-1 scale
 
     return state
 
@@ -265,7 +271,8 @@ def rule_grader_node(state: dict, min_docs: int = 1, min_confidence: float = 0.4
         - state["grade"]: "pass" | "refine" | "fail"
     """
     if state["retry_count"] >= state["max_retries"]:
-        state["grade"] = "pass"
+        state["grade"] = "fail"
+        state["failure_reason"] = "تم تجاوز الحد الأقصى لمحاولات تحسين الاستعلام دون العثور على نتائج كافية."
         return state
 
     docs = state.get("last_results", [])
@@ -311,9 +318,9 @@ def refine_node(state: dict) -> dict:
     response = llm.invoke(prompt)
 
     try:
-        data = json.loads(response.content)
+        data = json.loads(strip_code_fences(response.content))
         state["refined_query"] = data["refined_query"]
-    except:
+    except Exception:
         state["refined_query"] = query
 
     return state
@@ -342,10 +349,10 @@ def llm_grader_node(state: dict) -> dict:
     response = llm.invoke(prompt)
 
     try:
-        result = json.loads(response.content)
+        result = json.loads(strip_code_fences(response.content))
         state["llm_pass"] = result["pass"]
         state["failure_reason"] = result.get("reason", "")
-    except:
+    except Exception:
         state["llm_pass"] = False
         state["failure_reason"] = "فشل تحليل المستندات بسبب خطأ في تنسيق الرد."
 
@@ -355,7 +362,7 @@ def llm_grader_node(state: dict) -> dict:
 # Generate Answer Node
 @traceable(name="Generate Answer Node")
 def generate_answer_node(state: dict) -> dict:
-    query = state.get("refined_query") or state["last_query"]
+    query = state.get("refined_query") or state.get("rewritten_question") or state["last_query"]
     docs = state.get("last_results", [])
 
     if not docs:
