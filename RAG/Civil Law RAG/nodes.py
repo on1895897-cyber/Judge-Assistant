@@ -314,10 +314,6 @@ def rule_grader_node(state: dict, min_docs: int = 1, min_confidence: float = 0.5
     if confidence < min_confidence:
         state["grade"] = "refine"
         return state
-
-    # If everything looks good
-    state["grade"] = "pass"
-
     logger.info(
         "[Layer 4 - Rule Grader] grade=%s | doc_count=%d | confidence=%.3f | "
         "retry_count=%d | failure_reason=%s",
