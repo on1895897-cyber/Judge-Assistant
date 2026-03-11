@@ -25,7 +25,7 @@ _MONGO_DB = os.getenv("MONGO_DB", "Rag")
 _MONGO_COLLECTION = os.getenv("MONGO_COLLECTION", "Document Storage")
 _EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5")
 _CHROMA_COLLECTION = os.getenv("CHROMA_COLLECTION", "judicial_docs")
-_CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "")
+_CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./chroma_data")
 
 embedding_function = HuggingFaceEmbeddings(model_name=_EMBEDDING_MODEL)
 llm = ChatGroq(model_name="llama-3.3-70b-versatile")
