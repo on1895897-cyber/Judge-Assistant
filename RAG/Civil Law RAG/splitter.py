@@ -165,4 +165,61 @@ def split_egyptian_civil_law(text: str):
         else:
             docs.append(Document(page_content=sec.strip(), metadata={"type":"preface", "title":"المقدمة"}))
 
+    # Post-process: add adjacent article overlap for cross-article reasoning.
+    # Each article chunk gets a preview of its neighbors so the embedding
+    # captures context that spans article boundaries.
+    docs = _add_article_overlap(docs)
+
+    return docs
+
+
+def _add_article_overlap(docs: list, context_chars: int = 200) -> list:
+    """Enrich each article Document with a short preview of its neighboring
+    articles so that retrieval can capture cross-article context.
+
+    Parameters
+    ----------
+    docs : list[Document]
+        The list of Documents produced by ``split_egyptian_civil_law``.
+    context_chars : int
+        Maximum characters to include from each neighbor.
+
+    Returns
+    -------
+    list[Document]
+        The same list, with article page_content augmented in-place.
+    """
+    article_indices = [
+        i for i, d in enumerate(docs) if d.metadata.get("type") == "article"
+    ]
+
+    for pos, idx in enumerate(article_indices):
+        prev_snippet = ""
+        next_snippet = ""
+
+        # Previous article
+        if pos > 0:
+            prev_idx = article_indices[pos - 1]
+            prev_text = docs[prev_idx].page_content
+            prev_snippet = prev_text[:context_chars]
+
+        # Next article
+        if pos < len(article_indices) - 1:
+            next_idx = article_indices[pos + 1]
+            next_text = docs[next_idx].page_content
+            next_snippet = next_text[:context_chars]
+
+        overlap_parts = []
+        if prev_snippet:
+            overlap_parts.append(f"[سياق المادة السابقة]: {prev_snippet}...")
+        if next_snippet:
+            overlap_parts.append(f"[سياق المادة التالية]: {next_snippet}...")
+
+        if overlap_parts:
+            overlap_text = "\n".join(overlap_parts)
+            docs[idx] = Document(
+                page_content=f"{docs[idx].page_content}\n\n{overlap_text}",
+                metadata=docs[idx].metadata,
+            )
+
     return docs
