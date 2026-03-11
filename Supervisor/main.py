@@ -131,6 +131,10 @@ def ingest_files(
     This is the recommended way to add documents to a case ahead of time.
     Supports text files, PDFs, and images (images go through OCR first).
 
+    Uses the shared ``FileIngestor`` singleton so that documents indexed
+    here are visible to the Case Doc RAG adapter within the same process,
+    and -- thanks to ``CHROMA_PERSIST_DIR`` -- across process restarts.
+
     Parameters
     ----------
     file_paths : list of str
@@ -143,20 +147,9 @@ def ingest_files(
     list of dict
         One classification/storage result per file.
     """
-    from Supervisor.services.file_ingestor import FileIngestor
-    from Supervisor.config import (
-        MONGO_URI, MONGO_DB, MONGO_COLLECTION,
-        EMBEDDING_MODEL, CHROMA_COLLECTION, CHROMA_PERSIST_DIR,
-    )
+    from Supervisor.nodes.classify_and_store_document import _get_ingestor
 
-    ingestor = FileIngestor(
-        mongo_uri=MONGO_URI,
-        mongo_db=MONGO_DB,
-        mongo_collection=MONGO_COLLECTION,
-        embedding_model=EMBEDDING_MODEL,
-        chroma_collection=CHROMA_COLLECTION,
-        chroma_persist_dir=CHROMA_PERSIST_DIR,
-    )
+    ingestor = _get_ingestor()
     return ingestor.ingest_files(file_paths, case_id=case_id)
 
 
