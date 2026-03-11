@@ -114,7 +114,7 @@ Rewritten Question:
 
 قدّم الإجابة استناداً فقط إلى المستندات أعلاه:
 """
-llm = ChatGroq(model_name="llama-3.3-70b-versatile")
+# (Re-using module-level llm instance defined above)
 prompt = ChatPromptTemplate.from_template(template)
 
 rag_chain = prompt | llm
@@ -219,7 +219,7 @@ QUESTION_CLASSIFIER_PROMPT = """
     Respond ONLY with “Yes” or “No”.
     """
 
-QUESTION_CLASSIFIER_PROMPT= """
+QUESTION_REWRITER_PROMPT= """
 You are an assistant that reformulates a judge’s query into optimized standalone retrieval questions for a legal RAG system.
 
 Your task:
@@ -284,7 +284,7 @@ def questionRewriter(state: AgentState):
 
         messages = [
             SystemMessage(
-                content=QUESTION_CLASSIFIER_PROMPT
+                content=QUESTION_REWRITER_PROMPT
             )
         ]
 
@@ -315,7 +315,6 @@ def questionClassifier(state: AgentState):
     ]
 
     prompt = ChatPromptTemplate.from_messages(messages)
-    llm = ChatGroq(model_name="llama-3.3-70b-versatile")
     structuredLLM = llm.with_structured_output(GradeQuestion)
     graderLLM = prompt | structuredLLM
     result = graderLLM.invoke({})
@@ -364,8 +363,6 @@ def documentSelector(state: AgentState):
     ]
 
     prompt = ChatPromptTemplate.from_messages(messages)
-    llm = ChatGroq(model_name="llama-3.3-70b-versatile")
-
     structured_llm = llm.with_structured_output(DocSelection)
     runner = prompt | structured_llm
 
@@ -536,7 +533,6 @@ def retriveGrader(state: AgentState):
     
     Give a binary score 'Yes' or 'No'."""  
 
-    llm = ChatGroq(model_name="llama-3.3-70b-versatile")
     structuredLLM = llm.with_structured_output(GradeDocument)
     
     relevant_docs = []
@@ -584,7 +580,6 @@ def refineQuestion(state: AgentState):
         HumanMessage(content=question_to_refine)
     ])
 
-    llm = ChatGroq(model_name="llama-3.3-70b-versatile")
     prompt = prompt_template.format()
 
     response = llm.invoke(prompt)

@@ -32,6 +32,18 @@ from prompts import (
 )
 from langchain_community.embeddings import HuggingFaceEmbeddings
 
+
+def _strip_json_fences(text: str) -> str:
+    """Strip markdown code fences (e.g. ```json ... ```) that LLMs
+    sometimes wrap around JSON output, then return the inner content."""
+    text = text.strip()
+    # Remove opening fence (```json or ```)
+    text = re.sub(r'^```(?:json)?\s*\n?', '', text)
+    # Remove closing fence
+    text = re.sub(r'\n?```\s*$', '', text)
+    return text.strip()
+
+
 embeddings = HuggingFaceEmbeddings(
     model_name=EMBEDDING_MODEL
 )
@@ -113,10 +125,12 @@ def preprocessor_node(state: State) -> State:
 
     # 3. Parse JSON
     try:
-        data = json.loads(content)
+        data = json.loads(_strip_json_fences(content))
     except json.JSONDecodeError:
+        # Fallback: keep the original query and try analytical classification
+        # instead of silently dropping valid questions as off_topic
         state["rewritten_question"] = query
-        state["classification"] = "off_topic"
+        state["classification"] = "analytical"
         return state
 
     # 4. Normalize labels
@@ -233,7 +247,9 @@ def retrieve_node(state: dict, k: int = 5) -> dict:
     query = state.get("rewritten_question") or state.get("last_query")
 
     # 1️⃣ Retrieve top-k relevant articles
-    last_results = db.similarity_search(query, k=k, filter={"type": "article"})
+    results_with_scores = db.similarity_search_with_relevance_scores(query, k=k, filter={"type": "article"})
+    last_results = [doc for doc, _score in results_with_scores]
+    score_list = [score for _doc, score in results_with_scores]
 
     if not last_results:
         state["last_results"] = []
@@ -241,11 +257,7 @@ def retrieve_node(state: dict, k: int = 5) -> dict:
         return state
 
     # 2️⃣ Optional: compute a retrieval confidence based on similarity scores
-    # Note: Chroma may not return scores by default; this depends on your library
-    similarities = [
-        getattr(doc, "score", 1.0) for doc in last_results  # fallback to 1.0 if no score
-    ]
-    avg_confidence = sum(similarities) / len(similarities)
+    avg_confidence = sum(score_list) / len(score_list) if score_list else 0.0
 
     # 3️⃣ Update state
     state["last_results"] = last_results
@@ -265,7 +277,8 @@ def rule_grader_node(state: dict, min_docs: int = 1, min_confidence: float = 0.4
         - state["grade"]: "pass" | "refine" | "fail"
     """
     if state["retry_count"] >= state["max_retries"]:
-        state["grade"] = "pass"
+        state["grade"] = "fail"
+        state["failure_reason"] = "Max retrieval retries exceeded; documents may not be relevant."
         return state
 
     docs = state.get("last_results", [])
@@ -311,9 +324,9 @@ def refine_node(state: dict) -> dict:
     response = llm.invoke(prompt)
 
     try:
-        data = json.loads(response.content)
+        data = json.loads(_strip_json_fences(response.content))
         state["refined_query"] = data["refined_query"]
-    except:
+    except Exception:
         state["refined_query"] = query
 
     return state
@@ -342,7 +355,7 @@ def llm_grader_node(state: dict) -> dict:
     response = llm.invoke(prompt)
 
     try:
-        result = json.loads(response.content)
+        result = json.loads(_strip_json_fences(response.content))
         state["llm_pass"] = result["pass"]
         state["failure_reason"] = result.get("reason", "")
     except:
@@ -355,7 +368,7 @@ def llm_grader_node(state: dict) -> dict:
 # Generate Answer Node
 @traceable(name="Generate Answer Node")
 def generate_answer_node(state: dict) -> dict:
-    query = state.get("refined_query") or state["last_query"]
+    query = state.get("refined_query") or state.get("rewritten_question") or state["last_query"]
     docs = state.get("last_results", [])
 
     if not docs:

@@ -45,11 +45,16 @@ class CivilLawRAGAdapter(AgentAdapter):
             load_dotenv()
 
             from graph import app
+            from nodes import database
             from config import default_state_template
 
             # Build initial state from the template
             state = dict(default_state_template)
             state["last_query"] = query
+            # Bug 2 fix: default_state_template has db=None which causes
+            # retrieve_node to crash. Inject the module-level database.
+            if state.get("db") is None:
+                state["db"] = database
 
             result = app.invoke(state)
 
